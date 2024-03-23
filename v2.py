@@ -99,12 +99,15 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(n_embd, n_embd)   # project back into the residual pathway
     
     def forward(self, x):
         # x is (B, T, C)
         # h(x) is (B, T, head_size)
         # output is (B, T, num_heads * head_size)
-        return torch.cat([h(x) for h in self.heads], dim=-1)
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.proj(out)
+        return out
         
 # Feed forward layer that allows tokens to "think" after self-attending
 class FeedForward(nn.Module):
@@ -112,8 +115,9 @@ class FeedForward(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd),
-            nn.ReLU()
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),  # project back into the residual pathway
         )
     
     def forward(self, x):
@@ -129,8 +133,8 @@ class Block(nn.Module):
         self.ffwd = FeedForward(n_embd)
     
     def forward(self, x):
-        x = self.sa_heads(x)
-        x = self.ffwd(x)
+        x = x + self.sa_heads(x)    # self-attention with residual/skip connection
+        x = x + self.ffwd(x)        # feed-forward with residual/skip connection
         return x
 
 # simple bigram model (next char only depends on prev char)
