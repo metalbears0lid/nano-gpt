@@ -106,7 +106,7 @@ class MultiHeadAttention(nn.Module):
         # output is (B, T, num_heads * head_size)
         return torch.cat([h(x) for h in self.heads], dim=-1)
         
-
+# Feed forward layer that allows tokens to "think" after self-attending
 class FeedForward(nn.Module):
     '''Linear layer followed by a non-linearity'''
     def __init__(self, n_embd):
@@ -119,6 +119,20 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+# Block of multi-head attention with feed forward, which will be repeated sequentially in our LLM
+class Block(nn.Module):
+    '''Transformer block: communication followed by computation'''
+    def __init__(self, n_embd, num_heads):
+        super().__init__()
+        head_size = n_embd // num_heads
+        self.sa_heads = MultiHeadAttention(num_heads, head_size)
+        self.ffwd = FeedForward(n_embd)
+    
+    def forward(self, x):
+        x = self.sa_heads(x)
+        x = self.ffwd(x)
+        return x
+
 # simple bigram model (next char only depends on prev char)
 class BigramLanguageModel(nn.Module):
     def __init__(self):
@@ -126,8 +140,7 @@ class BigramLanguageModel(nn.Module):
         # each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.sa_heads = MultiHeadAttention(num_heads=4, head_size=n_embd//4)
-        self.ffwd = FeedForward(n_embd)
+        self.blocks = nn.Sequential(*[Block(n_embd, num_heads=4) for _ in range(3)])
         self.lm_head = nn.Linear(n_embd, vocab_size)    # language model head takes embeddings to logits
     
     def forward(self, idx, targets=None):
@@ -136,8 +149,7 @@ class BigramLanguageModel(nn.Module):
         tok_emb = self.token_embedding_table(idx)   # (B, T, C) batch(4) x time(8) x channel(n_embd=32)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T, C)
         x = tok_emb + pos_emb       # (B, T, C)
-        x = self.sa_heads(x)        # (B, T, num_heads * head_size=32)
-        x = self.ffwd(x)            # (B, T, n_embd=32)
+        x = self.blocks(x)          # (B, T, n_embd=32)
         logits = self.lm_head(x)    # (B, T, vocab_size=65)
 
         if targets is None:
