@@ -131,10 +131,12 @@ class Block(nn.Module):
         head_size = n_embd // num_heads
         self.sa_heads = MultiHeadAttention(num_heads, head_size)
         self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
     
     def forward(self, x):
-        x = x + self.sa_heads(x)    # self-attention with residual/skip connection
-        x = x + self.ffwd(x)        # feed-forward with residual/skip connection
+        x = x + self.sa_heads(self.ln1(x))    # self-attention with residual/skip connection
+        x = x + self.ffwd(self.ln2(x))        # feed-forward with residual/skip connection
         return x
 
 # simple bigram model (next char only depends on prev char)
@@ -145,6 +147,7 @@ class BigramLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
         self.blocks = nn.Sequential(*[Block(n_embd, num_heads=4) for _ in range(3)])
+        self.ln = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)    # language model head takes embeddings to logits
     
     def forward(self, idx, targets=None):
@@ -154,7 +157,7 @@ class BigramLanguageModel(nn.Module):
         pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T, C)
         x = tok_emb + pos_emb       # (B, T, C)
         x = self.blocks(x)          # (B, T, n_embd=32)
-        logits = self.lm_head(x)    # (B, T, vocab_size=65)
+        logits = self.lm_head(self.ln(x))    # (B, T, vocab_size=65)
 
         if targets is None:
             loss = None
