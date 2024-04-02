@@ -3,12 +3,15 @@ from torch import nn
 from torch.nn import functional as F
 
 # hyperparameters
-batch_size = 32 # how many sequences to process in parallel
-block_size = 8  # aka context length
-n_embd = 32     # dimension of embedded tokens
+batch_size = 64 # how many sequences to process in parallel
+block_size = 256  # aka context length
+n_embd = 384     # dimension of embedded tokens
+n_head = 6      # number of heads in the multi-headed self-attention
+n_layer = 6     # number of transformer blocks of self-attention and feed forward in the transformer
+dropout = 0.2
 max_iters = 5000
-eval_interval = 500
-learning_rate = 3e-3
+eval_interval = 200
+learning_rate = 3e-4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
 
@@ -75,6 +78,7 @@ class Head(nn.Module):
         self.key = nn.Linear(n_embd, head_size, bias=False)     # what I contain
         self.value = nn.Linear(n_embd, head_size, bias=False)   # what I'll communicate if another token finds me interesting
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+        self.dropout = nn.Dropout(dropout)
     
     def forward(self, x):
         # x is (B, T, C)
@@ -87,6 +91,7 @@ class Head(nn.Module):
         wei = q @ torch.transpose(k, -2, -1) * self.head_size**(-0.5)   # (B, T, T)
         wei = wei.masked_fill(self.tril[:T, :T]==0, -torch.inf)         # need to restrict to :T because at generation, we'll need to predict from shorter token seqs
         wei = torch.softmax(wei, dim=-1)
+        wei = self.dropout(wei)
 
         out = wei @ v   # (B, T, H)
         return out
@@ -100,13 +105,14 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         self.proj = nn.Linear(n_embd, n_embd)   # project back into the residual pathway
+        self.dropout = nn.Dropout(dropout)
     
     def forward(self, x):
         # x is (B, T, C)
         # h(x) is (B, T, head_size)
         # output is (B, T, num_heads * head_size)
         out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.proj(out)
+        out = self.dropout(self.proj(out))
         return out
         
 # Feed forward layer that allows tokens to "think" after self-attending
@@ -118,6 +124,7 @@ class FeedForward(nn.Module):
             nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
             nn.Linear(4 * n_embd, n_embd),  # project back into the residual pathway
+            nn.Dropout(dropout)
         )
     
     def forward(self, x):
@@ -126,10 +133,10 @@ class FeedForward(nn.Module):
 # Block of multi-head attention with feed forward, which will be repeated sequentially in our LLM
 class Block(nn.Module):
     '''Transformer block: communication followed by computation'''
-    def __init__(self, n_embd, num_heads):
+    def __init__(self, n_embd, n_head):
         super().__init__()
-        head_size = n_embd // num_heads
-        self.sa_heads = MultiHeadAttention(num_heads, head_size)
+        head_size = n_embd // n_head
+        self.sa_heads = MultiHeadAttention(n_head, head_size)
         self.ffwd = FeedForward(n_embd)
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
@@ -146,7 +153,7 @@ class BigramLanguageModel(nn.Module):
         # each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequential(*[Block(n_embd, num_heads=4) for _ in range(3)])
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
         self.ln = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)    # language model head takes embeddings to logits
     
